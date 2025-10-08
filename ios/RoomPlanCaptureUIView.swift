@@ -3,15 +3,18 @@ import UIKit
 import RoomPlan
 import ExpoModulesCore
 import AVFoundation
+import ARKit
 
 @available(iOS 17.0, *)
-class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureViewDelegate {
+class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureViewDelegate, ARSessionDelegate {
   private var roomCaptureView: RoomCaptureView!
   private let configuration = RoomCaptureSession.Configuration()
   // Events
   let onStatus = EventDispatcher()
   let onExported = EventDispatcher()
   let onPreview = EventDispatcher()
+  let onPhoto = EventDispatcher()
+  let onAudio = EventDispatcher()
 
   // Props
   var scanName: String? = nil
@@ -29,12 +32,29 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
   private var pendingExport: Bool = false
   private var previewEmitted: Bool = false
 
+  // Photo capture state
+  private var lastPhotoTrigger: Double? = nil
+  private var photoTimer: Timer?
+  private var autoPhotoIntervalSec: Double?
+  private var photoUrls: [URL] = []
+
+  // Audio recording state
+  var audioEnabled: Bool = false
+  private var isAudioRecording: Bool = false
+  private var audioRecorder: AVAudioRecorder?
+  private var audioFileURL: URL?
+  var stopAudioOnFinish: Bool = true
+
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
 
     roomCaptureView = RoomCaptureView(frame: .zero)
     roomCaptureView.translatesAutoresizingMaskIntoConstraints = false
     roomCaptureView.captureSession.delegate = self
+
+    // Access the underlying ARSession for photo capture
+    roomCaptureView.captureSession.arSession.delegate = self
+
     addSubview(roomCaptureView)
 
     NSLayoutConstraint.activate([
@@ -59,14 +79,16 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
       let status = AVCaptureDevice.authorizationStatus(for: .video)
       switch status {
       case .authorized:
-  previewEmitted = false
-  roomCaptureView.captureSession.run(configuration: configuration)
+        previewEmitted = false
+        roomCaptureView.captureSession.run(configuration: configuration)
+        setupPhotoAndAudioCapture()
       case .notDetermined:
         AVCaptureDevice.requestAccess(for: .video) { granted in
           DispatchQueue.main.async {
             if granted {
               self.previewEmitted = false
               self.roomCaptureView.captureSession.run(configuration: self.configuration)
+              self.setupPhotoAndAudioCapture()
             } else {
               self.sendError("Camera permission was not granted.")
             }
@@ -75,11 +97,36 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
       case .denied, .restricted:
         sendError("Camera permission is denied or restricted.")
       @unknown default:
-  previewEmitted = false
-  roomCaptureView.captureSession.run(configuration: configuration)
+        previewEmitted = false
+        roomCaptureView.captureSession.run(configuration: configuration)
+        setupPhotoAndAudioCapture()
       }
     } else {
       roomCaptureView.captureSession.stop(pauseARSession: false)
+      cleanupPhotoAndAudioCapture()
+    }
+  }
+
+  private func setupPhotoAndAudioCapture() {
+    // If auto-photo requested, schedule timer
+    if let sec = autoPhotoIntervalSec, sec > 0 {
+      self.photoTimer?.invalidate()
+      self.photoTimer = Timer.scheduledTimer(withTimeInterval: sec, repeats: true) { [weak self] _ in
+        self?.captureStillFromARSession()
+      }
+    }
+
+    // Start audio if requested
+    if audioEnabled && !isAudioRecording {
+      startAudioRecordingIfPermitted()
+    }
+  }
+
+  private func cleanupPhotoAndAudioCapture() {
+    photoTimer?.invalidate()
+    photoTimer = nil
+    if isAudioRecording {
+      stopAudioRecording()
     }
   }
 
@@ -122,6 +169,120 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     }
   }
 
+  // MARK: - Photo Capture
+
+  func handleCapturePhotoTrigger(_ trigger: Double?) {
+    guard let trigger else { return }
+    if lastPhotoTrigger != trigger {
+      lastPhotoTrigger = trigger
+      captureStillFromARSession()
+    }
+  }
+
+  func setAutoPhotoInterval(_ val: Double?) {
+    autoPhotoIntervalSec = val
+    photoTimer?.invalidate()
+    photoTimer = nil
+    if isRunning, let sec = val, sec > 0 {
+      photoTimer = Timer.scheduledTimer(withTimeInterval: sec, repeats: true) { [weak self] _ in
+        self?.captureStillFromARSession()
+      }
+    }
+  }
+
+  private func captureStillFromARSession() {
+    guard let frame = roomCaptureView.captureSession.arSession.currentFrame else {
+      sendError("No AR frame available for photo.")
+      return
+    }
+    let pixelBuffer = frame.capturedImage
+    let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+
+    // Convert to CGImage (off main thread to keep UI smooth)
+    let context = CIContext()
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      guard let self = self else { return }
+      guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return }
+
+      // Orientation: ARKit camera is typically .right for portrait device
+      let image = UIImage(cgImage: cgImage, scale: 1.0, orientation: .right)
+      let data = image.jpegData(compressionQuality: 0.9)
+
+      let folder = FileManager.default.temporaryDirectory.appending(path: "Export")
+      try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+      let ts = Int(Date().timeIntervalSince1970 * 1000)
+      let name = (self.scanName ?? "Room") + "_\(ts).jpg"
+      let url = folder.appending(path: name)
+
+      do {
+        try data?.write(to: url)
+        DispatchQueue.main.async {
+          self.photoUrls.append(url)
+          // Fire per-photo event to JS
+          self.onPhoto(["photoUrl": url.absoluteString, "timestamp": ts])
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.sendError("Failed to save photo: \(error.localizedDescription)")
+        }
+      }
+    }
+  }
+
+  // MARK: - Audio Recording
+
+  func setAudioRunning(_ running: Bool) {
+    if running {
+      startAudioRecordingIfPermitted()
+    } else {
+      stopAudioRecording()
+    }
+  }
+
+  private func startAudioRecordingIfPermitted() {
+    let session = AVAudioSession.sharedInstance()
+    session.requestRecordPermission { [weak self] granted in
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        guard granted else {
+          self.onAudio(["status": "error", "errorMessage": "Microphone permission not granted"])
+          return
+        }
+        do {
+          try session.setCategory(.playAndRecord, mode: .default, options: [.duckOthers, .allowBluetooth])
+          try session.setActive(true)
+
+          let folder = FileManager.default.temporaryDirectory.appending(path: "Export")
+          try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+          let name = (self.scanName ?? "Room") + ".m4a"
+          let url = folder.appending(path: name)
+          self.audioFileURL = url
+
+          let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: 44100,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+          ]
+          self.audioRecorder = try AVAudioRecorder(url: url, settings: settings)
+          self.audioRecorder?.prepareToRecord()
+          self.audioRecorder?.record()
+          self.isAudioRecording = true
+          self.onAudio(["status": "started", "audioUrl": url.absoluteString])
+        } catch {
+          self.onAudio(["status": "error", "errorMessage": error.localizedDescription])
+        }
+      }
+    }
+  }
+
+  private func stopAudioRecording() {
+    guard isAudioRecording else { return }
+    audioRecorder?.stop()
+    isAudioRecording = false
+    onAudio(["status": "stopped", "audioUrl": audioFileURL?.absoluteString ?? ""])
+  }
+
   // MARK: - RoomPlan delegates
   func captureSession(_ session: RoomCaptureSession, didEndWith data: CapturedRoomData, error: (any Error)?) {
     if let error {
@@ -135,6 +296,10 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
         self.capturedRooms.append(capturedRoom)
         // If finishing, emit preview now that the processed room exists
         if self.pendingFinish && !self.previewEmitted {
+          // Stop audio recording if configured to do so
+          if self.stopAudioOnFinish && self.isAudioRecording {
+            self.stopAudioRecording()
+          }
           self.onPreview([:])
           self.previewEmitted = true
           // If requested, export right after preview
@@ -195,14 +360,20 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
         try jsonData.write(to: capturedRoomURL)
         try structure.export(to: destinationURL, exportOptions: finalExportType)
 
-        if sendFileLoc {
-          self.onExported([
-            "scanUrl": destinationURL.absoluteString,
-            "jsonUrl": capturedRoomURL.absoluteString
-          ])
+        // Build payload
+        var payload: [String: Any] = [:]
+        if self.sendFileLoc {
+          payload["scanUrl"] = destinationURL.absoluteString
+          payload["jsonUrl"] = capturedRoomURL.absoluteString
         }
-  // Also emit a final OK status after export
-  self.sendStatus(.OK)
+        if let audio = self.audioFileURL {
+          payload["audioUrl"] = audio.absoluteString
+        }
+        payload["photoUrls"] = self.photoUrls.map { $0.absoluteString }
+
+        self.onExported(payload)
+        // Also emit a final OK status after export
+        self.sendStatus(.OK)
       } catch {
         self.sendError("Export failed: \(error.localizedDescription)")
       }

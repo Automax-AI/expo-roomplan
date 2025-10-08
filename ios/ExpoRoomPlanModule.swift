@@ -1,7 +1,6 @@
 import ExpoModulesCore
 import UIKit
 
-@available(iOS 17.0, *)
 public class ExpoRoomPlanModule: Module {
     private var captureViewController: RoomPlanCaptureViewController?
 
@@ -12,6 +11,10 @@ public class ExpoRoomPlanModule: Module {
 
         AsyncFunction("startCapture") {
             (scanName: String, exportType: String, sendFileLoc: Bool) in
+            guard #available(iOS 17.0, *) else {
+                throw Exception("startCapture", "RoomPlan requires iOS 17.0 or later")
+            }
+
             DispatchQueue.main.async {
                 let captureVC = RoomPlanCaptureViewController()
 
@@ -38,6 +41,10 @@ public class ExpoRoomPlanModule: Module {
         }
 
         AsyncFunction("stopCapture") {
+            guard #available(iOS 17.0, *) else {
+                throw Exception("stopCapture", "RoomPlan requires iOS 17.0 or later")
+            }
+
             DispatchQueue.main.async {
                 self.captureViewController?.stopSession()
                 self.captureViewController?.dismiss(

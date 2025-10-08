@@ -30,6 +30,17 @@ export interface RoomPlanViewProps extends ViewProps {
   // If true (default), finish will also export the result once ready
   /** When true, finishing a capture automatically exports once preview is shown. */
   exportOnFinish?: boolean;
+
+  /** Enable audio recording during scan. */
+  audioEnabled?: boolean;
+  /** Start/stop audio recording. */
+  audioRunning?: boolean;
+  /** Bump to take a photo from the AR camera feed. */
+  capturePhotoTrigger?: number;
+  /** Take a photo every N seconds while scanning (disable with 0/undefined). */
+  autoPhotoIntervalSec?: number;
+  /** Stop audio automatically when finish trigger completes. Default true. */
+  stopAudioOnFinish?: boolean;
   /** Standard React Native style prop. */
   style?: StyleProp<ViewStyle>;
   /** Receives status updates such as OK, Error, and Canceled. */
@@ -38,8 +49,23 @@ export interface RoomPlanViewProps extends ViewProps {
   }) => void;
   /** Called when the native preview UI is presented after finishing a scan. */
   onPreview?: () => void;
-  /** Emitted after export; includes file URLs when `sendFileLoc` is true. */
+  /** Per-photo callback. */
+  onPhoto?: (e: { nativeEvent: { photoUrl: string; timestamp: number } }) => void;
+  /** Audio state callback. */
+  onAudio?: (e: {
+    nativeEvent: {
+      status: "started" | "stopped" | "error";
+      audioUrl?: string;
+      errorMessage?: string;
+    };
+  }) => void;
+  /** Emitted after export; includes file URLs when `sendFileLoc` is true, now also includes media. */
   onExported?: (e: {
-    nativeEvent: { scanUrl?: string; jsonUrl?: string };
+    nativeEvent: {
+      scanUrl?: string;
+      jsonUrl?: string;
+      audioUrl?: string;
+      photoUrls?: string[];
+    };
   }) => void;
 }

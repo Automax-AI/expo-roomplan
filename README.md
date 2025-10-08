@@ -306,6 +306,84 @@ function Inner({
 }
 ```
 
+## Audio and Photo Capture Example
+
+Here's how to use the new audio recording and photo capture features:
+
+```tsx
+import React, { useState } from "react";
+import { SafeAreaView, View, Text, Pressable, StyleSheet } from "react-native";
+import { RoomPlanView, useRoomPlanView } from "expo-roomplan";
+
+export default function MediaCaptureDemo() {
+  const [overlay, setOverlay] = useState(false);
+  const { viewProps, controls, state } = useRoomPlanView({
+    scanName: "MediaRoom",
+    sendFileLoc: true,
+    audioEnabled: true, // Enable audio recording
+    autoPhotoIntervalSec: 3, // Take a photo every 3 seconds
+    onPhoto: (e) => {
+      console.log("Photo captured:", e.nativeEvent.photoUrl);
+    },
+    onAudio: (e) => {
+      console.log("Audio status:", e.nativeEvent.status);
+    },
+    onExported: (e) => {
+      console.log("Exported with media:");
+      console.log("- Scan:", e.nativeEvent.scanUrl);
+      console.log("- Audio:", e.nativeEvent.audioUrl);
+      console.log("- Photos:", e.nativeEvent.photoUrls);
+    },
+  });
+
+  return (
+    <SafeAreaView style={{ flex: 1 }}>
+      <Pressable
+        onPress={() => {
+          setOverlay(true);
+          controls.start();
+          controls.startAudio(); // Start recording audio
+        }}
+      >
+        <Text>Start Scan with Media</Text>
+      </Pressable>
+
+      {overlay && (
+        <View style={StyleSheet.absoluteFill}>
+          <RoomPlanView style={StyleSheet.absoluteFill} {...viewProps} />
+          <SafeAreaView
+            style={{
+              position: "absolute",
+              bottom: 20,
+              left: 20,
+              right: 20,
+              flexDirection: "row",
+              justifyContent: "space-around",
+            }}
+          >
+            <Pressable onPress={controls.capturePhoto}>
+              <Text>📸 Photo</Text>
+            </Pressable>
+            <Pressable onPress={controls.finishScan}>
+              <Text>✅ Finish</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => {
+                controls.cancel();
+                controls.stopAudio();
+                setOverlay(false);
+              }}
+            >
+              <Text>❌ Cancel</Text>
+            </Pressable>
+          </SafeAreaView>
+        </View>
+      )}
+    </SafeAreaView>
+  );
+}
+```
+
 ## RoomPlanView (Reference)
 
 Props
@@ -325,6 +403,18 @@ Props
 | onPreview         | () => void                                          | —          | Called when preview UI is presented.                                        |
 | onExported        | ({ nativeEvent: { scanUrl?, jsonUrl? }}) => void    | —          | Emitted after export; URLs when sendFileLoc is true.                        |
 
+#### Audio and Photo Capture Props (New)
+
+| Prop                 | Type                                               | Default | Description                                         |
+| -------------------- | -------------------------------------------------- | ------- | --------------------------------------------------- |
+| audioEnabled         | boolean                                            | false   | Enable audio recording during scan.                |
+| audioRunning         | boolean                                            | false   | Start/stop audio recording.                        |
+| capturePhotoTrigger  | number                                             | —       | Bump to take a photo from the AR camera feed.      |
+| autoPhotoIntervalSec | number                                             | —       | Take a photo every N seconds while scanning.       |
+| stopAudioOnFinish    | boolean                                            | true    | Stop audio automatically when finish completes.    |
+| onPhoto              | ({ nativeEvent: { photoUrl, timestamp }}) => void | —       | Called when a photo is captured.                   |
+| onAudio              | ({ nativeEvent: { status, audioUrl? }}) => void   | —       | Called when audio recording status changes.        |
+
 Notes
 
 - Finish and Add Room are edge-triggered by changing the trigger numbers (e.g. Date.now()).
@@ -341,16 +431,21 @@ Options
 | exportOnFinish            | boolean    | true       | Auto-export after finish.                             |
 | sendFileLoc               | boolean    | true       | Include file URLs in onExported.                      |
 | autoCloseOnTerminalStatus | boolean    | false      | Automatically set running=false on OK/Error/Canceled. |
+| audioEnabled              | boolean    | false      | Enable audio recording during scan.                    |
+| stopAudioOnFinish         | boolean    | true       | Stop audio automatically when finish completes.        |
+| autoPhotoIntervalSec      | number     | —          | Take a photo every N seconds while scanning.           |
 | onStatus                  | function   | —          | Intercepts status events.                             |
 | onPreview                 | function   | —          | Intercepts preview event.                             |
-| onExported                | function   | —          | Intercepts exported event.                            |
+| onPhoto                   | function   | —          | Intercepts photo capture events.                       |
+| onAudio                   | function   | —          | Intercepts audio recording status events.              |
+| onExported                | function   | —          | Intercepts exported event (now includes media URLs).   |
 
 Return shape
 
-| Key       | Type              | Description                                                     |
-| --------- | ----------------- | --------------------------------------------------------------- |
-| viewProps | RoomPlanViewProps | Spread onto RoomPlanView.                                       |
-| controls  | object            | { start, cancel, finishScan, addRoom, exportScan, reset }.      |
+| Key       | Type              | Description                                                                                              |
+| --------- | ----------------- | -------------------------------------------------------------------------------------------------------- |
+| viewProps | RoomPlanViewProps | Spread onto RoomPlanView.                                                                                |
+| controls  | object            | { start, cancel, finishScan, addRoom, exportScan, capturePhoto, startAudio, stopAudio, setAutoPhotoInterval, reset }. |
 | state     | object            | { isRunning, status, isPreviewVisible, lastExport, lastError }. |
 
 ## RoomPlanProvider (Reference)
@@ -362,6 +457,35 @@ Exports
 - RoomPlanProvider: wraps a subtree and initialises the controller and state.
 - useRoomPlanContext(): returns { viewProps, controls, state } from context.
 - RoomPlanViewConsumer: convenience component to render RoomPlanView using viewProps from context.
+
+## Required Permissions
+
+### iOS Permissions
+
+This module requires the following permissions in your app's Info.plist:
+
+- **Camera Permission** (NSCameraUsageDescription): Required for RoomPlan scanning
+  - Example: "This app uses the camera to scan and map your room."
+
+- **Microphone Permission** (NSMicrophoneUsageDescription): Required for audio recording feature
+  - Example: "This app records audio notes during room scanning."
+
+Add these to your `app.json` or `app.config.js` in managed Expo projects:
+
+```json
+{
+  "expo": {
+    "ios": {
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app uses the camera to scan and map your room.",
+        "NSMicrophoneUsageDescription": "This app records audio notes during room scanning."
+      }
+    }
+  }
+}
+```
+
+For bare React Native projects, add these directly to your `ios/YourAppName/Info.plist` file.
 
 # Installation in managed Expo projects
 

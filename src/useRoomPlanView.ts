@@ -14,12 +14,22 @@ export type UseRoomPlanViewOptions = {
   exportOnFinish?: boolean;
   /** When true, onExported receives file URLs instead of showing a share sheet. Defaults to `true`. */
   sendFileLoc?: boolean;
+  /** Enable audio recording during scan. Defaults to `false`. */
+  audioEnabled?: boolean;
+  /** Stop audio automatically when finish trigger completes. Defaults to `true`. */
+  stopAudioOnFinish?: boolean;
+  /** Take a photo every N seconds while scanning (disable with 0/undefined). */
+  autoPhotoIntervalSec?: number;
   /** Automatically stop scanning when status becomes OK, Error, or Canceled. Defaults to `false`. */
   autoCloseOnTerminalStatus?: boolean;
   /** Tap into status updates from the native view. */
   onStatus?: NonNullable<RoomPlanViewProps["onStatus"]>;
   /** Called when the native preview UI is presented after finishing a scan. */
   onPreview?: RoomPlanViewProps["onPreview"];
+  /** Per-photo callback. */
+  onPhoto?: RoomPlanViewProps["onPhoto"];
+  /** Audio state callback. */
+  onAudio?: RoomPlanViewProps["onAudio"];
   /** Called after export completes with file URLs when `sendFileLoc` is true. */
   onExported?: NonNullable<RoomPlanViewProps["onExported"]>;
 };
@@ -40,6 +50,14 @@ export type UseRoomPlanViewReturn = {
     addRoom: () => void;
     /** Trigger export manually. Queued until a room is available if called too early. */
     exportScan: () => void;
+    /** Take a photo from the AR camera feed. */
+    capturePhoto: () => void;
+    /** Start audio recording. */
+    startAudio: () => void;
+    /** Stop audio recording. */
+    stopAudio: () => void;
+    /** Set automatic photo interval (in seconds). Pass undefined to disable. */
+    setAutoPhotoInterval: (sec?: number) => void;
     /** Reset all local hook state and triggers to an initial idle state. */
     reset: () => void;
   };
@@ -82,9 +100,14 @@ export function useRoomPlanView(
     exportType,
     exportOnFinish = true,
     sendFileLoc = true,
+    audioEnabled = false,
+    stopAudioOnFinish = true,
+    autoPhotoIntervalSec: initialAutoPhotoInterval,
     autoCloseOnTerminalStatus = false,
     onStatus,
     onPreview,
+    onPhoto,
+    onAudio,
     onExported,
   } = options;
 
@@ -95,6 +118,11 @@ export function useRoomPlanView(
     number | undefined
   >();
   const [exportTrigger, setExportTrigger] = useState<number | undefined>();
+
+  // Audio and Photo state
+  const [capturePhotoTrigger, setCapturePhotoTrigger] = useState<number | undefined>();
+  const [audioRunning, setAudioRunning] = useState<boolean>(false);
+  const [autoPhotoIntervalSec, setAutoPhotoIntervalSec] = useState<number | undefined>(initialAutoPhotoInterval);
 
   // Derived UI state
   const [status, setStatus] = useState<ScanStatus | undefined>(undefined);
@@ -108,12 +136,16 @@ export function useRoomPlanView(
   const optsRef = useRef({
     onStatus,
     onPreview,
+    onPhoto,
+    onAudio,
     onExported,
     autoCloseOnTerminalStatus,
   });
   optsRef.current = {
     onStatus,
     onPreview,
+    onPhoto,
+    onAudio,
     onExported,
     autoCloseOnTerminalStatus,
   };
@@ -142,16 +174,35 @@ export function useRoomPlanView(
     setExportTrigger(Date.now());
   }, []);
 
+  const capturePhoto = useCallback(() => {
+    setCapturePhotoTrigger(Date.now());
+  }, []);
+
+  const startAudio = useCallback(() => {
+    setAudioRunning(true);
+  }, []);
+
+  const stopAudio = useCallback(() => {
+    setAudioRunning(false);
+  }, []);
+
+  const setAutoPhotoInterval = useCallback((sec?: number) => {
+    setAutoPhotoIntervalSec(sec);
+  }, []);
+
   const reset = useCallback(() => {
     setRunning(false);
     setFinishTrigger(undefined);
     setAddAnotherTrigger(undefined);
     setExportTrigger(undefined);
+    setCapturePhotoTrigger(undefined);
+    setAudioRunning(false);
+    setAutoPhotoIntervalSec(initialAutoPhotoInterval);
     setPreviewVisible(false);
     setStatus(undefined);
     setLastError(undefined);
     setLastExport(undefined);
-  }, []);
+  }, [initialAutoPhotoInterval]);
 
   // Event handlers that keep internal state in sync but forward to user callbacks
   const handleStatus: NonNullable<RoomPlanViewProps["onStatus"]> = useCallback(
@@ -176,6 +227,14 @@ export function useRoomPlanView(
     if (optsRef.current.onPreview) optsRef.current.onPreview();
   }, []);
 
+  const handlePhoto: RoomPlanViewProps["onPhoto"] = useCallback((e: Parameters<NonNullable<RoomPlanViewProps["onPhoto"]>>[0]) => {
+    if (optsRef.current.onPhoto) optsRef.current.onPhoto(e);
+  }, []);
+
+  const handleAudio: RoomPlanViewProps["onAudio"] = useCallback((e: Parameters<NonNullable<RoomPlanViewProps["onAudio"]>>[0]) => {
+    if (optsRef.current.onAudio) optsRef.current.onAudio(e);
+  }, []);
+
   const handleExported: NonNullable<RoomPlanViewProps["onExported"]> =
     useCallback((e) => {
       setLastExport({ ...e.nativeEvent });
@@ -194,9 +253,17 @@ export function useRoomPlanView(
       finishTrigger,
       addAnotherTrigger,
       exportTrigger,
+      // Audio and Photo props
+      audioEnabled,
+      audioRunning,
+      capturePhotoTrigger,
+      autoPhotoIntervalSec,
+      stopAudioOnFinish,
       // Events
       onStatus: handleStatus,
       onPreview: handlePreview,
+      onPhoto: handlePhoto,
+      onAudio: handleAudio,
       onExported: handleExported,
     }),
     [
@@ -208,15 +275,33 @@ export function useRoomPlanView(
       finishTrigger,
       addAnotherTrigger,
       exportTrigger,
+      audioEnabled,
+      audioRunning,
+      capturePhotoTrigger,
+      autoPhotoIntervalSec,
+      stopAudioOnFinish,
       handleStatus,
       handlePreview,
+      handlePhoto,
+      handleAudio,
       handleExported,
     ]
   );
 
   return {
     viewProps,
-    controls: { start, cancel, finishScan, addRoom, exportScan, reset },
+    controls: {
+      start,
+      cancel,
+      finishScan,
+      addRoom,
+      exportScan,
+      capturePhoto,
+      startAudio,
+      stopAudio,
+      setAutoPhotoInterval,
+      reset,
+    },
     state: {
       isRunning: running,
       status,
