@@ -12,7 +12,7 @@ public class ExpoRoomPlanModule: Module {
         AsyncFunction("startCapture") {
             (scanName: String, exportType: String, sendFileLoc: Bool) in
             guard #available(iOS 17.0, *) else {
-                throw Exception("startCapture", "RoomPlan requires iOS 17.0 or later")
+                throw Exception(name: "startCapture", description: "RoomPlan requires iOS 17.0 or later")
             }
 
             DispatchQueue.main.async {
@@ -42,7 +42,7 @@ public class ExpoRoomPlanModule: Module {
 
         AsyncFunction("stopCapture") {
             guard #available(iOS 17.0, *) else {
-                throw Exception("stopCapture", "RoomPlan requires iOS 17.0 or later")
+                throw Exception(name: "stopCapture", description: "RoomPlan requires iOS 17.0 or later")
             }
 
             DispatchQueue.main.async {
