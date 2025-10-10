@@ -70,14 +70,9 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     ])
   }
 
-  // Ensure all JS/JSI work occurs on the JS thread via RN bridge call invoker
+  // Ensure all event emissions are marshaled to the main thread (bridge-safe)
   private func emitOnJS(_ block: @escaping () -> Void) {
-    if let jsInvoker = appContext?.reactBridge?.jsCallInvoker {
-      jsInvoker.invokeAsync(block)
-    } else {
-      // Fallback to main if call invoker is unavailable
-      DispatchQueue.main.async(execute: block)
-    }
+    DispatchQueue.main.async(execute: block)
   }
 
   // Control running state from JS prop
