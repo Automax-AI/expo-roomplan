@@ -15,6 +15,7 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
   let onPreview = EventDispatcher()
   let onPhoto = EventDispatcher()
   let onAudio = EventDispatcher()
+  let onAudioData = EventDispatcher()
 
   // Props
   var scanName: String? = nil
@@ -41,9 +42,13 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
   // Audio recording state
   var audioEnabled: Bool = false
   private var isAudioRecording: Bool = false
-  private var audioRecorder: AVAudioRecorder?
   private var audioFileURL: URL?
   var stopAudioOnFinish: Bool = true
+
+  // Audio Engine for streaming
+  private var audioEngine: AVAudioEngine?
+  private var audioInputNode: AVAudioInputNode?
+  private var audioFile: AVAudioFile?  // For simultaneous file recording
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -240,35 +245,59 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
   }
 
   private func startAudioRecordingIfPermitted() {
-    let session = AVAudioSession.sharedInstance()
-    session.requestRecordPermission { [weak self] granted in
-      DispatchQueue.main.async {
-        guard let self = self else { return }
-        guard granted else {
-          self.onAudio(["status": "error", "errorMessage": "Microphone permission not granted"])
-          return
-        }
-        do {
-          try session.setCategory(.playAndRecord, mode: .default, options: [.duckOthers, .allowBluetooth])
-          try session.setActive(true)
+    AVAudioSession.sharedInstance().requestRecordPermission { granted in
+      guard granted else {
+        self.onAudio(["status": "error", "errorMessage": "Microphone permission denied"])
+        return
+      }
 
+      DispatchQueue.main.async {
+        do {
+          // Configure audio session
+          let audioSession = AVAudioSession.sharedInstance()
+          try audioSession.setCategory(.playAndRecord, mode: .default,
+                                      options: [.duckOthers, .allowBluetooth])
+          try audioSession.setActive(true)
+
+          // Setup audio engine
+          self.audioEngine = AVAudioEngine()
+          guard let audioEngine = self.audioEngine else { return }
+
+          self.audioInputNode = audioEngine.inputNode
+          guard let inputNode = self.audioInputNode else { return }
+
+          // Configure format: 16kHz, mono, 16-bit PCM (STT requirements)
+          let recordingFormat = AVAudioFormat(
+            commonFormat: .pcmFormatInt16,
+            sampleRate: 16000,
+            channels: 1,
+            interleaved: false
+          )!
+
+          // Setup file for backup recording
           let folder = FileManager.default.temporaryDirectory.appending(path: "Export")
           try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-          let name = (self.scanName ?? "Room") + ".m4a"
-          let url = folder.appending(path: name)
-          self.audioFileURL = url
+          let name = (self.scanName ?? "Room") + ".wav"  // Using WAV for PCM format
+          let fileURL = folder.appending(path: name)
+          self.audioFile = try AVAudioFile(forWriting: fileURL,
+                                          settings: recordingFormat.settings)
+          self.audioFileURL = fileURL
 
-          let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVSampleRateKey: 44100,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-          ]
-          self.audioRecorder = try AVAudioRecorder(url: url, settings: settings)
-          self.audioRecorder?.prepareToRecord()
-          self.audioRecorder?.record()
+          // Install tap to capture PCM buffers
+          inputNode.installTap(onBus: 0, bufferSize: 4096, format: recordingFormat) { buffer, _ in
+            // Stream to JavaScript
+            self.streamAudioBuffer(buffer)
+
+            // Also write to file
+            try? self.audioFile?.write(from: buffer)
+          }
+
+          // Start engine
+          try audioEngine.start()
           self.isAudioRecording = true
-          self.onAudio(["status": "started", "audioUrl": url.absoluteString])
+
+          self.onAudio(["status": "started", "audioUrl": fileURL.absoluteString])
+
         } catch {
           self.onAudio(["status": "error", "errorMessage": error.localizedDescription])
         }
@@ -278,9 +307,40 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
 
   private func stopAudioRecording() {
     guard isAudioRecording else { return }
-    audioRecorder?.stop()
+
+    // Stop audio engine
+    audioEngine?.stop()
+    audioInputNode?.removeTap(onBus: 0)
+    audioEngine = nil
+    audioInputNode = nil
+    audioFile = nil
+
     isAudioRecording = false
     onAudio(["status": "stopped", "audioUrl": audioFileURL?.absoluteString ?? ""])
+  }
+
+  // Stream audio buffer to JavaScript
+  private func streamAudioBuffer(_ buffer: AVAudioPCMBuffer) {
+    guard let channelData = buffer.int16ChannelData else { return }
+
+    let channelDataValue = channelData.pointee
+    let channelDataArray = Array(UnsafeBufferPointer(start: channelDataValue,
+                                                     count: Int(buffer.frameLength)))
+
+    // Convert Int16 array to Data
+    let data = channelDataArray.withUnsafeBytes { Data($0) }
+
+    // Convert to base64 for JavaScript bridge
+    let base64String = data.base64EncodedString()
+
+    // Send via event dispatcher
+    DispatchQueue.main.async {
+      self.onAudioData([
+        "pcmData": base64String,
+        "sampleRate": 16000,
+        "timestamp": Date().timeIntervalSince1970
+      ])
+    }
   }
 
   // MARK: - RoomPlan delegates

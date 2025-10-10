@@ -30,6 +30,8 @@ export type UseRoomPlanViewOptions = {
   onPhoto?: RoomPlanViewProps["onPhoto"];
   /** Audio state callback. */
   onAudio?: RoomPlanViewProps["onAudio"];
+  /** Audio data streaming callback for real-time PCM audio. */
+  onAudioData?: RoomPlanViewProps["onAudioData"];
   /** Called after export completes with file URLs when `sendFileLoc` is true. */
   onExported?: NonNullable<RoomPlanViewProps["onExported"]>;
 };
@@ -108,6 +110,7 @@ export function useRoomPlanView(
     onPreview,
     onPhoto,
     onAudio,
+    onAudioData,
     onExported,
   } = options;
 
@@ -138,6 +141,7 @@ export function useRoomPlanView(
     onPreview,
     onPhoto,
     onAudio,
+    onAudioData,
     onExported,
     autoCloseOnTerminalStatus,
   });
@@ -146,6 +150,7 @@ export function useRoomPlanView(
     onPreview,
     onPhoto,
     onAudio,
+    onAudioData,
     onExported,
     autoCloseOnTerminalStatus,
   };
@@ -235,6 +240,10 @@ export function useRoomPlanView(
     if (optsRef.current.onAudio) optsRef.current.onAudio(e);
   }, []);
 
+  const handleAudioData: RoomPlanViewProps["onAudioData"] = useCallback((e: Parameters<NonNullable<RoomPlanViewProps["onAudioData"]>>[0]) => {
+    if (optsRef.current.onAudioData) optsRef.current.onAudioData(e);
+  }, []);
+
   const handleExported: NonNullable<RoomPlanViewProps["onExported"]> =
     useCallback((e) => {
       setLastExport({ ...e.nativeEvent });
@@ -264,6 +273,7 @@ export function useRoomPlanView(
       onPreview: handlePreview,
       onPhoto: handlePhoto,
       onAudio: handleAudio,
+      onAudioData: handleAudioData,
       onExported: handleExported,
     }),
     [
@@ -284,6 +294,7 @@ export function useRoomPlanView(
       handlePreview,
       handlePhoto,
       handleAudio,
+      handleAudioData,
       handleExported,
     ]
   );

@@ -59,6 +59,14 @@ export interface RoomPlanViewProps extends ViewProps {
       errorMessage?: string;
     };
   }) => void;
+  /** Audio data streaming callback for real-time PCM audio. */
+  onAudioData?: (e: {
+    nativeEvent: {
+      pcmData: string;      // Base64 encoded PCM audio
+      sampleRate: number;   // Sample rate (16000)
+      timestamp: number;    // Unix timestamp
+    };
+  }) => void;
   /** Emitted after export; includes file URLs when `sendFileLoc` is true, now also includes media. */
   onExported?: (e: {
     nativeEvent: {

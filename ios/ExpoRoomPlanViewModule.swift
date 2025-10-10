@@ -8,7 +8,7 @@ public class ExpoRoomPlanViewModule: Module {
 
     // Register a React Native view that embeds RoomCaptureView
     View(RoomPlanCaptureUIView.self) {
-      Events("onStatus", "onExported", "onPreview", "onPhoto", "onAudio")
+      Events("onStatus", "onExported", "onPreview", "onPhoto", "onAudio", "onAudioData")
 
       // Props to control flow
       Prop("scanName") { (view, value: String?) in
