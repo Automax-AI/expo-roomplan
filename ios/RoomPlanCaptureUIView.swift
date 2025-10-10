@@ -70,10 +70,12 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     ])
   }
 
-  // Ensure all event emissions hop onto the JS thread if available (fallback to main)
+  // Ensure all event emissions hop onto the JS thread if available (fallbacks for older setups)
   private func emitOnJS(_ block: @escaping () -> Void) {
-    if let invoker = appContext?.jsCallInvoker {
+    if let invoker = appContext?.callInvoker {
       invoker.invokeAsync(block)
+    } else if let bridge = appContext?.reactBridge, let jsInvoker = bridge.jsCallInvoker {
+      jsInvoker.invokeAsync(block)
     } else {
       DispatchQueue.main.async(execute: block)
     }
