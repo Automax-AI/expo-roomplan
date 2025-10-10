@@ -70,6 +70,16 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     ])
   }
 
+  // Ensure all JS/JSI work occurs on the JS thread via Expo call invoker
+  private func emitOnJS(_ block: @escaping () -> Void) {
+    if let invoker = appContext?.callInvoker {
+      invoker.invokeAsync(block)
+    } else {
+      // Fallback to main if call invoker is unavailable
+      DispatchQueue.main.async(execute: block)
+    }
+  }
+
   // Control running state from JS prop
   func setRunning(_ running: Bool) {
     guard running != isRunning else { return }
@@ -77,7 +87,7 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     if running {
       // Check device support before starting
       if !RoomCaptureSession.isSupported {
-        sendError("RoomPlan is not supported on this device.")
+        emitOnJS { self.sendError("RoomPlan is not supported on this device.") }
         return
       }
       // Check/request camera permission
@@ -95,12 +105,12 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
               self.roomCaptureView.captureSession.run(configuration: self.configuration)
               self.setupPhotoAndAudioCapture()
             } else {
-              self.sendError("Camera permission was not granted.")
+              self.emitOnJS { self.sendError("Camera permission was not granted.") }
             }
           }
         }
       case .denied, .restricted:
-        sendError("Camera permission is denied or restricted.")
+        emitOnJS { self.sendError("Camera permission is denied or restricted.") }
       @unknown default:
         previewEmitted = false
         roomCaptureView.captureSession.run(configuration: configuration)
@@ -197,7 +207,7 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
 
   private func captureStillFromARSession() {
     guard let frame = roomCaptureView.captureSession.arSession.currentFrame else {
-      sendError("No AR frame available for photo.")
+      emitOnJS { self.sendError("No AR frame available for photo.") }
       return
     }
     let pixelBuffer = frame.capturedImage
@@ -223,11 +233,13 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
         try data?.write(to: url)
         DispatchQueue.main.async {
           self.photoUrls.append(url)
-          // Fire per-photo event to JS
+        }
+        // Fire per-photo event on JS thread
+        self.emitOnJS {
           self.onPhoto(["photoUrl": url.absoluteString, "timestamp": ts])
         }
       } catch {
-        DispatchQueue.main.async {
+        self.emitOnJS {
           self.sendError("Failed to save photo: \(error.localizedDescription)")
         }
       }
@@ -247,7 +259,9 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
   private func startAudioRecordingIfPermitted() {
     AVAudioSession.sharedInstance().requestRecordPermission { granted in
       guard granted else {
-        self.onAudio(["status": "error", "errorMessage": "Microphone permission denied"])
+        self.emitOnJS {
+          self.onAudio(["status": "error", "errorMessage": "Microphone permission denied"])
+        }
         return
       }
 
@@ -296,10 +310,14 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
           try audioEngine.start()
           self.isAudioRecording = true
 
-          self.onAudio(["status": "started", "audioUrl": fileURL.absoluteString])
+          self.emitOnJS {
+            self.onAudio(["status": "started", "audioUrl": fileURL.absoluteString])
+          }
 
         } catch {
-          self.onAudio(["status": "error", "errorMessage": error.localizedDescription])
+          self.emitOnJS {
+            self.onAudio(["status": "error", "errorMessage": error.localizedDescription])
+          }
         }
       }
     }
@@ -316,7 +334,9 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     audioFile = nil
 
     isAudioRecording = false
-    onAudio(["status": "stopped", "audioUrl": audioFileURL?.absoluteString ?? ""])
+    emitOnJS {
+      self.onAudio(["status": "stopped", "audioUrl": self.audioFileURL?.absoluteString ?? ""])
+    }
   }
 
   // Stream audio buffer to JavaScript
@@ -333,8 +353,8 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     // Convert to base64 for JavaScript bridge
     let base64String = data.base64EncodedString()
 
-    // Send via event dispatcher
-    DispatchQueue.main.async {
+    // Send via event dispatcher on JS thread
+    emitOnJS {
       self.onAudioData([
         "pcmData": base64String,
         "sampleRate": 16000,
@@ -346,7 +366,7 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
   // MARK: - RoomPlan delegates
   func captureSession(_ session: RoomCaptureSession, didEndWith data: CapturedRoomData, error: (any Error)?) {
     if let error {
-      sendError(error.localizedDescription)
+      emitOnJS { self.sendError(error.localizedDescription) }
       return
     }
     let roomBuilder = RoomBuilder(options: [.beautifyObjects])
@@ -360,7 +380,7 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
           if self.stopAudioOnFinish && self.isAudioRecording {
             self.stopAudioRecording()
           }
-          self.onPreview([:])
+          self.emitOnJS { self.onPreview([:]) }
           self.previewEmitted = true
           // If requested, export right after preview
           if self.exportOnFinish {
@@ -373,16 +393,16 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
           self.pendingExport = false
           self.exportResults()
         } else {
-          self.sendStatus(.OK)
+          self.emitOnJS { self.sendStatus(.OK) }
         }
       } catch {
-        self.sendError("Failed to build captured room: \(error.localizedDescription)")
+        self.emitOnJS { self.sendError("Failed to build captured room: \(error.localizedDescription)") }
       }
     }
   }
 
   func captureSession(_ session: RoomCaptureSession, didFailWith error: any Error) {
-    sendError(error.localizedDescription)
+    emitOnJS { self.sendError(error.localizedDescription) }
   }
 
   func captureView(shouldPresent roomDataForProcessing: CapturedRoomData, error: Error?) -> Bool {
@@ -392,7 +412,7 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
   func captureView(didPresent processedResult: CapturedRoom, error: Error?) {
     // RoomPlan presented its own preview UI; notify JS once
     if !previewEmitted {
-      onPreview([:])
+      emitOnJS { self.onPreview([:]) }
       previewEmitted = true
     }
   }
@@ -431,11 +451,11 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
         }
         payload["photoUrls"] = self.photoUrls.map { $0.absoluteString }
 
-        self.onExported(payload)
+        self.emitOnJS { self.onExported(payload) }
         // Also emit a final OK status after export
-        self.sendStatus(.OK)
+        self.emitOnJS { self.sendStatus(.OK) }
       } catch {
-        self.sendError("Export failed: \(error.localizedDescription)")
+        self.emitOnJS { self.sendError("Export failed: \(error.localizedDescription)") }
       }
     }
   }
