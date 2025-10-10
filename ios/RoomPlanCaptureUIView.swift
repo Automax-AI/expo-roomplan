@@ -70,9 +70,13 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     ])
   }
 
-  // Ensure all event emissions are marshaled to the main thread (bridge-safe)
+  // Ensure all event emissions hop onto the JS thread if available (fallback to main)
   private func emitOnJS(_ block: @escaping () -> Void) {
-    DispatchQueue.main.async(execute: block)
+    if let invoker = appContext?.jsCallInvoker {
+      invoker.invokeAsync(block)
+    } else {
+      DispatchQueue.main.async(execute: block)
+    }
   }
 
   // Control running state from JS prop
@@ -457,10 +461,10 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
 
   // MARK: - Events
   private func sendStatus(_ status: ScanStatus) {
-  self.onStatus(["status": status.rawValue])
+    emitOnJS { self.onStatus(["status": status.rawValue]) }
   }
 
   private func sendError(_ message: String) {
-    self.onStatus(["status": ScanStatus.Error.rawValue, "errorMessage": message])
+    emitOnJS { self.onStatus(["status": ScanStatus.Error.rawValue, "errorMessage": message]) }
   }
 }
