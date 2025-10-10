@@ -70,15 +70,11 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     ])
   }
 
-  // Ensure all event emissions hop onto the JS thread if available (fallbacks for older setups)
+  // Version-agnostic: ensure emissions occur on main; EventDispatcher forwards to JS thread
+  @inline(__always)
   private func emitOnJS(_ block: @escaping () -> Void) {
-    if let invoker = appContext?.callInvoker {
-      invoker.invokeAsync(block)
-    } else if let bridge = appContext?.reactBridge, let jsInvoker = bridge.jsCallInvoker {
-      jsInvoker.invokeAsync(block)
-    } else {
-      DispatchQueue.main.async(execute: block)
-    }
+    if Thread.isMainThread { block() }
+    else { DispatchQueue.main.async(execute: block) }
   }
 
   // Control running state from JS prop

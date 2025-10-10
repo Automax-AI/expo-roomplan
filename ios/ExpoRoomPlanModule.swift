@@ -24,7 +24,9 @@ public class ExpoRoomPlanModule: Module {
                 captureVC.sendFileLoc = sendFileLoc
 
                 captureVC.onDismiss = { eventData in
-                    self.sendEvent("onDismissEvent", eventData)
+                    DispatchQueue.main.async {
+                        self.sendEvent("onDismissEvent", eventData)
+                    }
                 }
 
                 guard
