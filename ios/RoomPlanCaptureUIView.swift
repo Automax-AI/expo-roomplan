@@ -51,16 +51,31 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
   private var audioFile: AVAudioFile?  // For simultaneous file recording
 
   required init(appContext: AppContext? = nil) {
+    print("[RoomPlan] RoomPlanCaptureUIView init started")
     super.init(appContext: appContext)
 
-    roomCaptureView = RoomCaptureView(frame: .zero)
+    print("[RoomPlan] Creating RoomCaptureView...")
+    // Check if we're on the main thread
+    print("[RoomPlan] Is main thread: \(Thread.isMainThread)")
+
+    do {
+      roomCaptureView = RoomCaptureView(frame: .zero)
+      print("[RoomPlan] RoomCaptureView created successfully")
+    } catch {
+      print("[RoomPlan] ERROR: Failed to create RoomCaptureView: \(error)")
+      // Create a dummy view to prevent crash
+      roomCaptureView = RoomCaptureView(frame: .zero)
+    }
+
     roomCaptureView.translatesAutoresizingMaskIntoConstraints = false
     roomCaptureView.captureSession.delegate = self
 
     // Access the underlying ARSession for photo capture
     roomCaptureView.captureSession.arSession.delegate = self
+    print("[RoomPlan] Delegates set successfully")
 
     addSubview(roomCaptureView)
+    print("[RoomPlan] RoomCaptureView added as subview")
 
     NSLayoutConstraint.activate([
       roomCaptureView.topAnchor.constraint(equalTo: topAnchor),
@@ -79,59 +94,109 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
 
   // Control running state from JS prop
   func setRunning(_ running: Bool) {
-    guard running != isRunning else { return }
+    print("[RoomPlan] setRunning called with: \(running), current isRunning: \(isRunning)")
+    guard running != isRunning else {
+      print("[RoomPlan] setRunning - no change needed")
+      return
+    }
     isRunning = running
     if running {
+      print("[RoomPlan] Starting RoomPlan capture...")
+
       // Check device support before starting
+      print("[RoomPlan] Checking device support...")
       if !RoomCaptureSession.isSupported {
+        print("[RoomPlan] ERROR: RoomPlan is not supported on this device")
         emitOnJS { self.sendError("RoomPlan is not supported on this device.") }
         return
       }
+      print("[RoomPlan] Device support check passed")
+
       // Check/request camera permission
       let status = AVCaptureDevice.authorizationStatus(for: .video)
+      print("[RoomPlan] Camera permission status: \(status.rawValue)")
+
       switch status {
       case .authorized:
+        print("[RoomPlan] Camera authorized, starting capture session...")
         previewEmitted = false
-        roomCaptureView.captureSession.run(configuration: configuration)
-        setupPhotoAndAudioCapture()
+
+        // Ensure we're on main thread and view is ready
+        DispatchQueue.main.async { [weak self] in
+          guard let self = self else { return }
+
+          print("[RoomPlan] View bounds: \(self.bounds)")
+          print("[RoomPlan] RoomCaptureView bounds: \(self.roomCaptureView.bounds)")
+          print("[RoomPlan] About to call roomCaptureView.captureSession.run...")
+
+          self.roomCaptureView.captureSession.run(configuration: self.configuration)
+          print("[RoomPlan] captureSession.run called successfully")
+
+          // Move setupPhotoAndAudioCapture inside async block
+          self.setupPhotoAndAudioCapture()
+          print("[RoomPlan] setupPhotoAndAudioCapture completed")
+        }
+
       case .notDetermined:
+        print("[RoomPlan] Camera permission not determined, requesting...")
         AVCaptureDevice.requestAccess(for: .video) { granted in
+          print("[RoomPlan] Camera permission response: \(granted)")
           DispatchQueue.main.async {
             if granted {
               self.previewEmitted = false
+              print("[RoomPlan] Starting capture session after permission granted...")
               self.roomCaptureView.captureSession.run(configuration: self.configuration)
               self.setupPhotoAndAudioCapture()
             } else {
+              print("[RoomPlan] Camera permission denied by user")
               self.emitOnJS { self.sendError("Camera permission was not granted.") }
             }
           }
         }
       case .denied, .restricted:
+        print("[RoomPlan] Camera permission is denied or restricted")
         emitOnJS { self.sendError("Camera permission is denied or restricted.") }
       @unknown default:
+        print("[RoomPlan] Unknown camera permission status, attempting to start...")
         previewEmitted = false
         roomCaptureView.captureSession.run(configuration: configuration)
         setupPhotoAndAudioCapture()
       }
     } else {
+      print("[RoomPlan] Stopping RoomPlan capture...")
       roomCaptureView.captureSession.stop(pauseARSession: false)
       cleanupPhotoAndAudioCapture()
+      print("[RoomPlan] RoomPlan capture stopped")
     }
   }
 
   private func setupPhotoAndAudioCapture() {
+    print("[RoomPlan] setupPhotoAndAudioCapture called")
+
     // If auto-photo requested, schedule timer
     if let sec = autoPhotoIntervalSec, sec > 0 {
+      print("[RoomPlan] Setting up auto-photo with interval: \(sec)")
       self.photoTimer?.invalidate()
       self.photoTimer = Timer.scheduledTimer(withTimeInterval: sec, repeats: true) { [weak self] _ in
         self?.captureStillFromARSession()
       }
     }
 
-    // Start audio if requested
+    // TEMPORARILY DISABLED: Skip audio to isolate crash
+    print("[RoomPlan] Audio setup DISABLED for debugging")
+    /*
+    // Start audio if requested - delay to avoid ARSession conflict
     if audioEnabled && !isAudioRecording {
-      startAudioRecordingIfPermitted()
+      print("[RoomPlan] Audio enabled, will start in 1 second...")
+      // Delay audio start to let ARSession fully initialize
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+        print("[RoomPlan] Starting audio recording after delay...")
+        self?.startAudioRecordingIfPermitted()
+      }
+    } else {
+      print("[RoomPlan] Audio not enabled or already recording")
     }
+    */
   }
 
   private func cleanupPhotoAndAudioCapture() {
@@ -264,11 +329,12 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
 
       DispatchQueue.main.async {
         do {
-          // Configure audio session
+          // Configure audio session - use measurement mode for AR compatibility
           let audioSession = AVAudioSession.sharedInstance()
-          try audioSession.setCategory(.playAndRecord, mode: .default,
-                                      options: [.duckOthers, .allowBluetooth])
-          try audioSession.setActive(true)
+          // Use measurement mode which is more compatible with ARSession
+          try audioSession.setCategory(.playAndRecord, mode: .measurement,
+                                      options: [.mixWithOthers, .allowBluetooth])
+          try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
 
           // Setup audio engine
           self.audioEngine = AVAudioEngine()
@@ -312,8 +378,17 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
           }
 
         } catch {
+          // Log the specific error for debugging
+          print("[RoomPlan] Audio recording failed to start: \(error.localizedDescription)")
+
+          // Don't crash - just report the error
+          self.isAudioRecording = false
+          self.audioEngine = nil
+          self.audioInputNode = nil
+          self.audioFile = nil
+
           self.emitOnJS {
-            self.onAudio(["status": "error", "errorMessage": error.localizedDescription])
+            self.onAudio(["status": "error", "errorMessage": "Audio recording unavailable: \(error.localizedDescription)"])
           }
         }
       }
