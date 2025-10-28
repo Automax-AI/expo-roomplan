@@ -236,11 +236,18 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     guard let trigger else { return }
     if lastAddAnotherTrigger == trigger { return }
     lastAddAnotherTrigger = trigger
-    // Ensure current session is stopped, then start again to capture the next room
-  pendingFinish = false
-  pendingExport = false
-  previewEmitted = false
-  roomCaptureView.captureSession.stop(pauseARSession: false)
+
+    // IMPORTANT: Do NOT clear capturedRooms - we want to keep accumulating rooms
+    // This preserves all the scanning progress made so far
+    print("[RoomPlan] Continuing scan with \(capturedRooms.count) room(s) already captured")
+
+    // Reset state flags but keep the captured data
+    pendingFinish = false
+    pendingExport = false
+    previewEmitted = false
+
+    // Stop current session and restart to continue scanning
+    roomCaptureView.captureSession.stop(pauseARSession: false)
     DispatchQueue.main.async {
       self.roomCaptureView.captureSession.run(configuration: self.configuration)
     }
@@ -496,6 +503,8 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     let destinationFolderURL = FileManager.default.temporaryDirectory.appending(path: "Export")
     let destinationURL = destinationFolderURL.appending(path: "\(exportedScanName).usdz")
     let capturedRoomURL = destinationFolderURL.appending(path: "\(exportedScanName).json")
+
+    print("[RoomPlan] Exporting \(capturedRooms.count) captured room(s)")
 
     Task {
       do {
