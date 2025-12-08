@@ -1,5 +1,5 @@
-import type { ViewProps, StyleProp, ViewStyle } from "react-native";
-import type { ScanStatus, ExportType } from "./ExpoRoomplan.types";
+import type { ViewProps, StyleProp, ViewStyle } from 'react-native';
+import type { ScanStatus, ExportType } from './ExpoRoomplan.types';
 
 /**
  * Props for {@link RoomPlanView}.
@@ -41,12 +41,22 @@ export interface RoomPlanViewProps extends ViewProps {
   autoPhotoIntervalSec?: number;
   /** Stop audio automatically when finish trigger completes. Default true. */
   stopAudioOnFinish?: boolean;
+
+  /**
+   * Bump to pause the scan and enter photo capture mode.
+   * Preserves AR session state for relocalization when resuming.
+   */
+  pauseTrigger?: number;
+  /**
+   * Bump to resume the scan after taking photos.
+   * Uses ARKit relocalization to continue from where the scan left off.
+   */
+  resumeTrigger?: number;
+
   /** Standard React Native style prop. */
   style?: StyleProp<ViewStyle>;
   /** Receives status updates such as OK, Error, and Canceled. */
-  onStatus?: (e: {
-    nativeEvent: { status: ScanStatus; errorMessage?: string };
-  }) => void;
+  onStatus?: (e: { nativeEvent: { status: ScanStatus; errorMessage?: string } }) => void;
   /** Called when the native preview UI is presented after finishing a scan. */
   onPreview?: () => void;
   /** Per-photo callback. */
@@ -54,7 +64,7 @@ export interface RoomPlanViewProps extends ViewProps {
   /** Audio state callback. */
   onAudio?: (e: {
     nativeEvent: {
-      status: "started" | "stopped" | "error";
+      status: 'started' | 'stopped' | 'error';
       audioUrl?: string;
       errorMessage?: string;
     };
@@ -62,9 +72,9 @@ export interface RoomPlanViewProps extends ViewProps {
   /** Audio data streaming callback for real-time PCM audio. */
   onAudioData?: (e: {
     nativeEvent: {
-      pcmData: string;      // Base64 encoded PCM audio
-      sampleRate: number;   // Sample rate (16000)
-      timestamp: number;    // Unix timestamp
+      pcmData: string; // Base64 encoded PCM audio
+      sampleRate: number; // Sample rate (16000)
+      timestamp: number; // Unix timestamp
     };
   }) => void;
   /** Emitted after export; includes file URLs when `sendFileLoc` is true, now also includes media. */
@@ -74,6 +84,29 @@ export interface RoomPlanViewProps extends ViewProps {
       jsonUrl?: string;
       audioUrl?: string;
       photoUrls?: string[];
+    };
+  }) => void;
+
+  /**
+   * Called when the scan is paused for photo capture mode.
+   * At this point, the camera overlay can be shown.
+   */
+  onPaused?: () => void;
+  /**
+   * Called when the scan resumes after photo capture.
+   * ARKit will attempt relocalization to continue from the previous position.
+   */
+  onResumed?: () => void;
+
+  /**
+   * Called with relocalization status updates during resume.
+   * Provides feedback about ARKit's attempt to relocalize to the previous scan position.
+   */
+  onRelocalizationStatus?: (e: {
+    nativeEvent: {
+      status: 'starting' | 'relocalizing' | 'success' | 'unavailable';
+      reason?: string;
+      message: string;
     };
   }) => void;
 }

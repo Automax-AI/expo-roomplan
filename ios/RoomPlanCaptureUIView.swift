@@ -16,6 +16,9 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
   let onPhoto = EventDispatcher()
   let onAudio = EventDispatcher()
   let onAudioData = EventDispatcher()
+  let onPaused = EventDispatcher()
+  let onResumed = EventDispatcher()
+  let onRelocalizationStatus = EventDispatcher()
 
   // Props
   var scanName: String? = nil
@@ -32,6 +35,13 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
   private var pendingFinish: Bool = false
   private var pendingExport: Bool = false
   private var previewEmitted: Bool = false
+
+  // Pause/Resume state for photo capture mode
+  private var isPaused: Bool = false
+  private var lastPauseTrigger: Double? = nil
+  private var lastResumeTrigger: Double? = nil
+  private var savedWorldMap: ARWorldMap? = nil  // Saved AR world map for relocalization
+  private var isWaitingForRelocalization: Bool = false  // Track if we're waiting for relocalization
 
   // Photo capture state
   private var lastPhotoTrigger: Double? = nil
@@ -253,6 +263,123 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     }
   }
 
+  // MARK: - Pause/Resume for Photo Mode
+
+  /// Pause the scan to allow taking photos with the regular camera
+  /// Saves the ARWorldMap for relocalization when resuming
+  func handlePauseTrigger(_ trigger: Double?) {
+    guard let trigger else { return }
+    if lastPauseTrigger == trigger { return }
+    lastPauseTrigger = trigger
+
+    guard isRunning && !isPaused else {
+      print("[RoomPlan] Cannot pause - not running or already paused")
+      return
+    }
+
+    print("[RoomPlan] Pausing scan for photo capture mode...")
+    isPaused = true
+
+    // First, save the current ARWorldMap for relocalization
+    let arSession = roomCaptureView.captureSession.arSession
+    arSession.getCurrentWorldMap { [weak self] worldMap, error in
+      guard let self = self else { return }
+
+      if let error = error {
+        print("[RoomPlan] Warning: Failed to get world map: \(error.localizedDescription)")
+        // Continue anyway - relocalization may still work with pauseARSession: true
+      } else if let worldMap = worldMap {
+        self.savedWorldMap = worldMap
+        print("[RoomPlan] ARWorldMap saved successfully with \(worldMap.anchors.count) anchors")
+      }
+
+      // Stop the capture session but KEEP the AR session running
+      // This preserves the world tracking state for relocalization when resuming
+      DispatchQueue.main.async {
+        self.roomCaptureView.captureSession.stop(pauseARSession: true)
+        print("[RoomPlan] Scan paused - AR session preserved for relocalization")
+
+        // Notify JS that pause is complete - camera overlay can now be shown
+        self.emitOnJS {
+          self.onPaused([:])
+        }
+      }
+    }
+  }
+
+  /// Resume the scan after taking photos
+  /// Uses saved ARWorldMap for relocalization to continue from where it left off
+  func handleResumeTrigger(_ trigger: Double?) {
+    guard let trigger else { return }
+    if lastResumeTrigger == trigger { return }
+    lastResumeTrigger = trigger
+
+    guard isPaused else {
+      print("[RoomPlan] Cannot resume - not paused")
+      return
+    }
+
+    print("[RoomPlan] Resuming scan with relocalization...")
+    isPaused = false
+    isWaitingForRelocalization = true
+
+    // Notify JS that relocalization is starting
+    emitOnJS {
+      self.onRelocalizationStatus(["status": "starting", "message": "Starting relocalization..."])
+    }
+
+    DispatchQueue.main.async { [weak self] in
+      guard let self = self else { return }
+
+      // If we have a saved world map, use it for relocalization
+      if let worldMap = self.savedWorldMap {
+        print("[RoomPlan] Using saved ARWorldMap for relocalization...")
+
+        // Create AR world tracking configuration with the saved world map
+        let arWorldTrackingConfig = ARWorldTrackingConfiguration()
+        arWorldTrackingConfig.initialWorldMap = worldMap
+        arWorldTrackingConfig.planeDetection = [.horizontal, .vertical]
+
+        // Run the AR session with the world map for relocalization
+        self.roomCaptureView.captureSession.arSession.run(arWorldTrackingConfig, options: [])
+
+        print("[RoomPlan] AR session running with initial world map - waiting for relocalization...")
+
+        // Give ARKit a moment to relocalize, then start the RoomPlan capture
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+          guard let self = self else { return }
+
+          // Now start the RoomPlan capture session
+          self.roomCaptureView.captureSession.run(configuration: self.configuration)
+          print("[RoomPlan] RoomPlan capture session resumed")
+
+          // Clear the saved world map
+          self.savedWorldMap = nil
+
+          // Notify JS that resume is complete
+          self.emitOnJS {
+            self.onResumed([:])
+          }
+        }
+      } else {
+        // No saved world map - just restart the capture session
+        print("[RoomPlan] No saved world map - resuming with standard relocalization")
+        self.roomCaptureView.captureSession.run(configuration: self.configuration)
+        print("[RoomPlan] Scan resumed - ARKit attempting relocalization")
+
+        // Notify JS that resume is complete
+        self.emitOnJS {
+          self.onResumed([:])
+        }
+      }
+    }
+  }
+
+  /// Check if the scan is currently paused
+  func getIsPaused() -> Bool {
+    return isPaused
+  }
+
   // MARK: - Photo Capture
 
   func handleCapturePhotoTrigger(_ trigger: Double?) {
@@ -443,6 +570,14 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
   }
 
   // MARK: - RoomPlan delegates
+
+  /// Enable relocalization when the session is interrupted (e.g., for photo capture)
+  /// This allows ARKit to try to restore tracking when the session resumes
+  func sessionShouldAttemptRelocalization(_ session: RoomCaptureSession) -> Bool {
+    print("[RoomPlan] sessionShouldAttemptRelocalization called - returning true")
+    return true
+  }
+
   func captureSession(_ session: RoomCaptureSession, didEndWith data: CapturedRoomData, error: (any Error)?) {
     if let error {
       emitOnJS { self.sendError(error.localizedDescription) }
@@ -493,6 +628,60 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     if !previewEmitted {
       emitOnJS { self.onPreview([:]) }
       previewEmitted = true
+    }
+  }
+
+  // MARK: - ARSession Delegate (for relocalization tracking)
+
+  /// Monitor ARKit camera tracking state for relocalization feedback
+  func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
+    switch camera.trackingState {
+    case .normal:
+      print("[RoomPlan] AR tracking state: NORMAL - relocalization successful")
+      if isWaitingForRelocalization {
+        isWaitingForRelocalization = false
+        emitOnJS {
+          self.onRelocalizationStatus(["status": "success", "message": "Relocalization successful"])
+        }
+      }
+    case .notAvailable:
+      print("[RoomPlan] AR tracking state: NOT AVAILABLE")
+      if isWaitingForRelocalization {
+        emitOnJS {
+          self.onRelocalizationStatus(["status": "unavailable", "message": "AR tracking not available"])
+        }
+      }
+    case .limited(let reason):
+      var reasonString: String
+      var message: String
+      switch reason {
+      case .excessiveMotion:
+        reasonString = "excessiveMotion"
+        message = "Move the device more slowly"
+        print("[RoomPlan] AR tracking state: LIMITED - excessive motion")
+      case .insufficientFeatures:
+        reasonString = "insufficientFeatures"
+        message = "Point at an area with more visual detail"
+        print("[RoomPlan] AR tracking state: LIMITED - insufficient features")
+      case .initializing:
+        reasonString = "initializing"
+        message = "Initializing..."
+        print("[RoomPlan] AR tracking state: LIMITED - initializing")
+      case .relocalizing:
+        reasonString = "relocalizing"
+        message = "Looking for previously scanned area..."
+        isWaitingForRelocalization = true
+        print("[RoomPlan] AR tracking state: LIMITED - relocalizing...")
+      @unknown default:
+        reasonString = "unknown"
+        message = "Tracking limited"
+        print("[RoomPlan] AR tracking state: LIMITED - unknown reason")
+      }
+      if isWaitingForRelocalization {
+        emitOnJS {
+          self.onRelocalizationStatus(["status": "relocalizing", "reason": reasonString, "message": message])
+        }
+      }
     }
   }
 

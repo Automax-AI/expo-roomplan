@@ -8,7 +8,7 @@ public class ExpoRoomPlanViewModule: Module {
 
     // Register a React Native view that embeds RoomCaptureView
     View(RoomPlanCaptureUIView.self) {
-      Events("onStatus", "onExported", "onPreview", "onPhoto", "onAudio", "onAudioData")
+      Events("onStatus", "onExported", "onPreview", "onPhoto", "onAudio", "onAudioData", "onPaused", "onResumed", "onRelocalizationStatus")
 
       // Props to control flow
       Prop("scanName") { (view, value: String?) in
@@ -62,6 +62,17 @@ public class ExpoRoomPlanViewModule: Module {
       // Optional: stop audio automatically when capture finishes
       Prop("stopAudioOnFinish") { (view, value: Bool?) in
         view.stopAudioOnFinish = value ?? true
+      }
+
+      // Pause/Resume for photo capture mode with relocalization
+      // Bump to pause scan and switch to photo mode
+      Prop("pauseTrigger") { (view, value: Double?) in
+        view.handlePauseTrigger(value)
+      }
+
+      // Bump to resume scan after taking photos (uses ARKit relocalization)
+      Prop("resumeTrigger") { (view, value: Double?) in
+        view.handleResumeTrigger(value)
       }
     }
   }
