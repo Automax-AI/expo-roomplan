@@ -70,8 +70,8 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
   }
 
   required init(appContext: AppContext? = nil) {
-    logMsg("RoomPlanCaptureUIView init started")
     super.init(appContext: appContext)
+    logMsg("RoomPlanCaptureUIView init started")
 
     logMsg("Creating RoomCaptureView...")
     // Check if we're on the main thread
