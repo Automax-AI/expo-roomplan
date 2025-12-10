@@ -650,7 +650,7 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
         print("[RoomPlan] Relocalization failed, starting fresh scan")
         isWaitingForRelocalization = false
         isRelocalized = false
-        savedWorldMap = nil
+        RoomPlanCaptureUIView.savedWorldMap = nil
         
         emitOnJS { self.onStatus(["status": "relocalization_failed"]) }
         
@@ -671,7 +671,7 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
       print("[RoomPlan] Relocalization error, starting fresh scan")
       isWaitingForRelocalization = false
       isRelocalized = false
-      savedWorldMap = nil
+      RoomPlanCaptureUIView.savedWorldMap = nil
       
       emitOnJS { self.onStatus(["status": "relocalization_failed", "errorMessage": error.localizedDescription]) }
       
