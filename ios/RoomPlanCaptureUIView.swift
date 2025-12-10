@@ -76,15 +76,8 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     logMsg("Creating RoomCaptureView...")
     // Check if we're on the main thread
     print("[RoomPlan] Is main thread: \(Thread.isMainThread)")
-
-    do {
-      roomCaptureView = RoomCaptureView(frame: .zero)
-      logMsg("RoomCaptureView created successfully")
-    } catch {
-      logMsg("ERROR: Failed to create RoomCaptureView: \(error)")
-      // Create a dummy view to prevent crash
-      roomCaptureView = RoomCaptureView(frame: .zero)
-    }
+    roomCaptureView = RoomCaptureView(frame: .zero)
+    logMsg("RoomCaptureView created successfully")
 
     roomCaptureView.translatesAutoresizingMaskIntoConstraints = false
     roomCaptureView.captureSession.delegate = self
@@ -144,30 +137,30 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
         DispatchQueue.main.async { [weak self] in
           guard let self = self else { return }
 
-          logMsg("View bounds: \(self.bounds)")
-          logMsg("RoomCaptureView bounds: \(self.roomCaptureView.bounds)")
-          logMsg("About to call roomCaptureView.captureSession.run...")
+          self.logMsg("View bounds: \(self.bounds)")
+          self.logMsg("RoomCaptureView bounds: \(self.roomCaptureView.bounds)")
+          self.logMsg("About to call roomCaptureView.captureSession.run...")
 
           self.roomCaptureView.captureSession.run(configuration: self.configuration)
-          logMsg("captureSession.run called successfully")
+          self.logMsg("captureSession.run called successfully")
 
           // Move setupPhotoAndAudioCapture inside async block
           self.setupPhotoAndAudioCapture()
-          logMsg("setupPhotoAndAudioCapture completed")
+          self.logMsg("setupPhotoAndAudioCapture completed")
         }
 
       case .notDetermined:
         logMsg("Camera permission not determined, requesting...")
         AVCaptureDevice.requestAccess(for: .video) { granted in
-          logMsg("Camera permission response: \(granted)")
+          self.logMsg("Camera permission response: \(granted)")
           DispatchQueue.main.async {
             if granted {
               self.previewEmitted = false
-              logMsg("Starting capture session after permission granted...")
+              self.logMsg("Starting capture session after permission granted...")
               self.roomCaptureView.captureSession.run(configuration: self.configuration)
               self.setupPhotoAndAudioCapture()
             } else {
-              logMsg("Camera permission denied by user")
+              self.logMsg("Camera permission denied by user")
               self.emitOnJS { self.sendError("Camera permission was not granted.") }
             }
           }
@@ -361,7 +354,7 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
       guard let self = self else { return }
       
-      logMsg("Configuring ARSession for relocalization...")
+      self.logMsg("Configuring ARSession for relocalization...")
       
       // Configure AR session with saved world map for relocalization
       // Use ARWorldTrackingConfiguration which is compatible with the world map
@@ -372,20 +365,20 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
       
       // Run AR session with the saved world map - use resetTracking to clear any bad state
       // but keep anchors from the world map. Remove any existing anchors to avoid conflicts.
-      logMsg("Starting ARSession with world map for relocalization...")
+      self.logMsg("Starting ARSession with world map for relocalization...")
       // Ensure delegate is set before relocalization
       self.roomCaptureView.captureSession.arSession.delegate = self
       self.roomCaptureView.captureSession.arSession.run(
         arConfig,
         options: [.resetTracking, .removeExistingAnchors]
       )
-      logMsg("ARSession started, waiting for tracking state to become normal...")
+      self.logMsg("ARSession started, waiting for tracking state to become normal...")
       
       // Set a timeout to avoid hanging on relocalization forever; fall back to fresh scan
       let timeout = DispatchWorkItem { [weak self] in
         guard let self = self else { return }
         if self.isWaitingForRelocalization && !self.isRelocalized {
-          logMsg("Relocalization timed out, starting fresh scan")
+          self.logMsg("Relocalization timed out, starting fresh scan")
           self.isWaitingForRelocalization = false
           self.isRelocalized = false
           RoomPlanCaptureUIView.savedWorldMap = nil
