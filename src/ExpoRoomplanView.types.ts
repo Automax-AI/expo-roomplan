@@ -1,5 +1,5 @@
-import type { ViewProps, StyleProp, ViewStyle } from "react-native";
-import type { ScanStatus, ExportType } from "./ExpoRoomplan.types";
+import type { ViewProps, StyleProp, ViewStyle } from 'react-native';
+import type { ScanStatus, ExportType } from './ExpoRoomplan.types';
 
 /**
  * Props for {@link RoomPlanView}.
@@ -27,6 +27,12 @@ export interface RoomPlanViewProps extends ViewProps {
   // Continue scanning and accumulate additional rooms. Bump the number to trigger.
   /** Bump to finish the current room and immediately start a new capture. */
   addAnotherTrigger?: number;
+  /**
+   * Bump to resume a paused scan with ARWorldMap relocalization.
+   * This loads the saved world map from the previous scan and attempts to
+   * relocalize the AR session to continue scanning in the same coordinate space.
+   */
+  resumeTrigger?: number;
   // If true (default), finish will also export the result once ready
   /** When true, finishing a capture automatically exports once preview is shown. */
   exportOnFinish?: boolean;
@@ -43,9 +49,18 @@ export interface RoomPlanViewProps extends ViewProps {
   stopAudioOnFinish?: boolean;
   /** Standard React Native style prop. */
   style?: StyleProp<ViewStyle>;
-  /** Receives status updates such as OK, Error, and Canceled. */
+  /**
+   * Receives status updates such as OK, Error, Canceled, and relocalization states.
+   * Additional statuses for resume functionality:
+   * - 'relocalizing': AR session is attempting to match saved world map
+   * - 'relocated': Successfully relocalized, scan will continue
+   * - 'relocalization_failed': Could not relocalize, starting fresh scan
+   */
   onStatus?: (e: {
-    nativeEvent: { status: ScanStatus; errorMessage?: string };
+    nativeEvent: {
+      status: ScanStatus | 'relocalizing' | 'relocated' | 'relocalization_failed';
+      errorMessage?: string;
+    };
   }) => void;
   /** Called when the native preview UI is presented after finishing a scan. */
   onPreview?: () => void;
@@ -54,7 +69,7 @@ export interface RoomPlanViewProps extends ViewProps {
   /** Audio state callback. */
   onAudio?: (e: {
     nativeEvent: {
-      status: "started" | "stopped" | "error";
+      status: 'started' | 'stopped' | 'error';
       audioUrl?: string;
       errorMessage?: string;
     };
@@ -62,9 +77,9 @@ export interface RoomPlanViewProps extends ViewProps {
   /** Audio data streaming callback for real-time PCM audio. */
   onAudioData?: (e: {
     nativeEvent: {
-      pcmData: string;      // Base64 encoded PCM audio
-      sampleRate: number;   // Sample rate (16000)
-      timestamp: number;    // Unix timestamp
+      pcmData: string; // Base64 encoded PCM audio
+      sampleRate: number; // Sample rate (16000)
+      timestamp: number; // Unix timestamp
     };
   }) => void;
   /** Emitted after export; includes file URLs when `sendFileLoc` is true, now also includes media. */

@@ -39,6 +39,11 @@ public class ExpoRoomPlanViewModule: Module {
         view.handleAddAnotherTrigger(value)
       }
 
+      // Resume a paused scan with ARWorldMap relocalization
+      Prop("resumeTrigger") { (view, value: Double?) in
+        view.handleResumeTrigger(value)
+      }
+
       // NEW: enable/disable audio recording
       Prop("audioEnabled") { (view, value: Bool?) in
         view.audioEnabled = value ?? false

@@ -1,6 +1,6 @@
-import { useCallback, useMemo, useRef, useState } from "react";
-import type { RoomPlanViewProps } from "./ExpoRoomplanView.types";
-import type { ExportType, ScanStatus } from "./ExpoRoomplan.types";
+import { useCallback, useMemo, useRef, useState } from 'react';
+import type { RoomPlanViewProps } from './ExpoRoomplanView.types';
+import type { ExportType, ScanStatus } from './ExpoRoomplan.types';
 
 /**
  * Options for {@link useRoomPlanView}.
@@ -23,17 +23,17 @@ export type UseRoomPlanViewOptions = {
   /** Automatically stop scanning when status becomes OK, Error, or Canceled. Defaults to `false`. */
   autoCloseOnTerminalStatus?: boolean;
   /** Tap into status updates from the native view. */
-  onStatus?: NonNullable<RoomPlanViewProps["onStatus"]>;
+  onStatus?: NonNullable<RoomPlanViewProps['onStatus']>;
   /** Called when the native preview UI is presented after finishing a scan. */
-  onPreview?: RoomPlanViewProps["onPreview"];
+  onPreview?: RoomPlanViewProps['onPreview'];
   /** Per-photo callback. */
-  onPhoto?: RoomPlanViewProps["onPhoto"];
+  onPhoto?: RoomPlanViewProps['onPhoto'];
   /** Audio state callback. */
-  onAudio?: RoomPlanViewProps["onAudio"];
+  onAudio?: RoomPlanViewProps['onAudio'];
   /** Audio data streaming callback for real-time PCM audio. */
-  onAudioData?: RoomPlanViewProps["onAudioData"];
+  onAudioData?: RoomPlanViewProps['onAudioData'];
   /** Called after export completes with file URLs when `sendFileLoc` is true. */
-  onExported?: NonNullable<RoomPlanViewProps["onExported"]>;
+  onExported?: NonNullable<RoomPlanViewProps['onExported']>;
 };
 
 /**
@@ -50,6 +50,12 @@ export type UseRoomPlanViewReturn = {
     finishScan: () => void;
     /** Finish the current room and immediately start capturing another. */
     addRoom: () => void;
+    /**
+     * Resume a paused scan using the saved ARWorldMap.
+     * The AR session will attempt to relocalize to the previous coordinate space
+     * before continuing the scan.
+     */
+    resumeScan: () => void;
     /** Trigger export manually. Queued until a room is available if called too early. */
     exportScan: () => void;
     /** Take a photo from the AR camera feed. */
@@ -70,6 +76,8 @@ export type UseRoomPlanViewReturn = {
     status?: ScanStatus;
     /** True once the iOS preview UI has been presented for the current finish flow. */
     isPreviewVisible: boolean;
+    /** True when AR session is attempting to relocalize to a saved world map. */
+    isRelocating: boolean;
     /** Details of the last successful export, if any. */
     lastExport?: { scanUrl?: string; jsonUrl?: string };
     /** Last error message received from the native view, if any. */
@@ -94,9 +102,7 @@ export type UseRoomPlanViewReturn = {
  * );
  * ```
  */
-export function useRoomPlanView(
-  options: UseRoomPlanViewOptions = {}
-): UseRoomPlanViewReturn {
+export function useRoomPlanView(options: UseRoomPlanViewOptions = {}): UseRoomPlanViewReturn {
   const {
     scanName,
     exportType,
@@ -117,22 +123,24 @@ export function useRoomPlanView(
   // Internal control state
   const [running, setRunning] = useState(false);
   const [finishTrigger, setFinishTrigger] = useState<number | undefined>();
-  const [addAnotherTrigger, setAddAnotherTrigger] = useState<
-    number | undefined
-  >();
+  const [addAnotherTrigger, setAddAnotherTrigger] = useState<number | undefined>();
   const [exportTrigger, setExportTrigger] = useState<number | undefined>();
+  const [resumeTrigger, setResumeTrigger] = useState<number | undefined>();
 
   // Audio and Photo state
   const [capturePhotoTrigger, setCapturePhotoTrigger] = useState<number | undefined>();
   const [audioRunning, setAudioRunning] = useState<boolean>(false);
-  const [autoPhotoIntervalSec, setAutoPhotoIntervalSec] = useState<number | undefined>(initialAutoPhotoInterval);
+  const [autoPhotoIntervalSec, setAutoPhotoIntervalSec] = useState<number | undefined>(
+    initialAutoPhotoInterval
+  );
 
   // Derived UI state
   const [status, setStatus] = useState<ScanStatus | undefined>(undefined);
   const [isPreviewVisible, setPreviewVisible] = useState(false);
-  const [lastExport, setLastExport] = useState<
-    { scanUrl?: string; jsonUrl?: string } | undefined
-  >(undefined);
+  const [isRelocating, setIsRelocating] = useState(false);
+  const [lastExport, setLastExport] = useState<{ scanUrl?: string; jsonUrl?: string } | undefined>(
+    undefined
+  );
   const [lastError, setLastError] = useState<string | undefined>(undefined);
 
   // Cache callbacks refs to avoid stale closures in event handlers
@@ -175,6 +183,12 @@ export function useRoomPlanView(
     setPreviewVisible(false);
   }, []);
 
+  const resumeScan = useCallback(() => {
+    setResumeTrigger(Date.now());
+    setPreviewVisible(false);
+    setIsRelocating(true);
+  }, []);
+
   const exportScan = useCallback(() => {
     setExportTrigger(Date.now());
   }, []);
@@ -200,55 +214,79 @@ export function useRoomPlanView(
     setFinishTrigger(undefined);
     setAddAnotherTrigger(undefined);
     setExportTrigger(undefined);
+    setResumeTrigger(undefined);
     setCapturePhotoTrigger(undefined);
     setAudioRunning(false);
     setAutoPhotoIntervalSec(initialAutoPhotoInterval);
     setPreviewVisible(false);
+    setIsRelocating(false);
     setStatus(undefined);
     setLastError(undefined);
     setLastExport(undefined);
   }, [initialAutoPhotoInterval]);
 
   // Event handlers that keep internal state in sync but forward to user callbacks
-  const handleStatus: NonNullable<RoomPlanViewProps["onStatus"]> = useCallback(
-    (e) => {
-      const s = e.nativeEvent.status as ScanStatus;
-      const errorMessage = e.nativeEvent.errorMessage;
-      setStatus(s);
-      if (errorMessage) setLastError(errorMessage);
-      if (optsRef.current.onStatus) optsRef.current.onStatus(e);
+  const handleStatus: NonNullable<RoomPlanViewProps['onStatus']> = useCallback((e) => {
+    const s = e.nativeEvent.status;
+    const errorMessage = e.nativeEvent.errorMessage;
 
-      if (optsRef.current.autoCloseOnTerminalStatus) {
-        if (s === "OK" || s === "Error" || s === "Canceled") {
-          setRunning(false);
-        }
+    // Handle relocalization status updates
+    if (s === 'relocalizing') {
+      setIsRelocating(true);
+    } else if (s === 'relocated') {
+      setIsRelocating(false);
+      // Scan is now running after successful relocalization
+      setRunning(true);
+    } else if (s === 'relocalization_failed') {
+      setIsRelocating(false);
+      // Scan started fresh after relocalization failure
+      setRunning(true);
+      if (errorMessage) setLastError(errorMessage);
+    } else {
+      // Regular ScanStatus
+      setStatus(s as ScanStatus);
+      if (errorMessage) setLastError(errorMessage);
+    }
+
+    if (optsRef.current.onStatus) optsRef.current.onStatus(e);
+
+    if (optsRef.current.autoCloseOnTerminalStatus) {
+      if (s === 'OK' || s === 'Error' || s === 'Canceled') {
+        setRunning(false);
       }
-    },
-    []
-  );
+    }
+  }, []);
 
   const handlePreview = useCallback(() => {
     setPreviewVisible(true);
     if (optsRef.current.onPreview) optsRef.current.onPreview();
   }, []);
 
-  const handlePhoto: RoomPlanViewProps["onPhoto"] = useCallback((e: Parameters<NonNullable<RoomPlanViewProps["onPhoto"]>>[0]) => {
-    if (optsRef.current.onPhoto) optsRef.current.onPhoto(e);
-  }, []);
+  const handlePhoto: RoomPlanViewProps['onPhoto'] = useCallback(
+    (e: Parameters<NonNullable<RoomPlanViewProps['onPhoto']>>[0]) => {
+      if (optsRef.current.onPhoto) optsRef.current.onPhoto(e);
+    },
+    []
+  );
 
-  const handleAudio: RoomPlanViewProps["onAudio"] = useCallback((e: Parameters<NonNullable<RoomPlanViewProps["onAudio"]>>[0]) => {
-    if (optsRef.current.onAudio) optsRef.current.onAudio(e);
-  }, []);
+  const handleAudio: RoomPlanViewProps['onAudio'] = useCallback(
+    (e: Parameters<NonNullable<RoomPlanViewProps['onAudio']>>[0]) => {
+      if (optsRef.current.onAudio) optsRef.current.onAudio(e);
+    },
+    []
+  );
 
-  const handleAudioData: RoomPlanViewProps["onAudioData"] = useCallback((e: Parameters<NonNullable<RoomPlanViewProps["onAudioData"]>>[0]) => {
-    if (optsRef.current.onAudioData) optsRef.current.onAudioData(e);
-  }, []);
+  const handleAudioData: RoomPlanViewProps['onAudioData'] = useCallback(
+    (e: Parameters<NonNullable<RoomPlanViewProps['onAudioData']>>[0]) => {
+      if (optsRef.current.onAudioData) optsRef.current.onAudioData(e);
+    },
+    []
+  );
 
-  const handleExported: NonNullable<RoomPlanViewProps["onExported"]> =
-    useCallback((e) => {
-      setLastExport({ ...e.nativeEvent });
-      if (optsRef.current.onExported) optsRef.current.onExported(e);
-    }, []);
+  const handleExported: NonNullable<RoomPlanViewProps['onExported']> = useCallback((e) => {
+    setLastExport({ ...e.nativeEvent });
+    if (optsRef.current.onExported) optsRef.current.onExported(e);
+  }, []);
 
   const viewProps: RoomPlanViewProps = useMemo(
     () => ({
@@ -261,6 +299,7 @@ export function useRoomPlanView(
       running,
       finishTrigger,
       addAnotherTrigger,
+      resumeTrigger,
       exportTrigger,
       // Audio and Photo props
       audioEnabled,
@@ -284,6 +323,7 @@ export function useRoomPlanView(
       running,
       finishTrigger,
       addAnotherTrigger,
+      resumeTrigger,
       exportTrigger,
       audioEnabled,
       audioRunning,
@@ -306,6 +346,7 @@ export function useRoomPlanView(
       cancel,
       finishScan,
       addRoom,
+      resumeScan,
       exportScan,
       capturePhoto,
       startAudio,
@@ -317,6 +358,7 @@ export function useRoomPlanView(
       isRunning: running,
       status,
       isPreviewVisible,
+      isRelocating,
       lastExport,
       lastError,
     },
