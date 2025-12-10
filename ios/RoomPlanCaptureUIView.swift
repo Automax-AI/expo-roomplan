@@ -51,7 +51,11 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
   private var audioFile: AVAudioFile?  // For simultaneous file recording
 
   // ARWorldMap storage for scan resume functionality
-  private var savedWorldMap: ARWorldMap?
+  // Use static storage so the world map persists across view recreations
+  private static var savedWorldMap: ARWorldMap?
+  private static var savedWorldMapFileURL: URL? {
+    FileManager.default.temporaryDirectory.appendingPathComponent("roomplan_worldmap.arworldmap")
+  }
   private var isRelocalized: Bool = false
   private var isWaitingForRelocalization: Bool = false
   private var lastResumeTrigger: Double? = nil
@@ -241,10 +245,25 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
       guard let self = self else { return }
       
       if let error = error {
-        print("[RoomPlan] Failed to get ARWorldMap: \(error.localizedDescription)")
+        print("[RoomPlan] ERROR: Failed to get ARWorldMap: \(error.localizedDescription)")
       } else if let worldMap = worldMap {
-        self.savedWorldMap = worldMap
-        print("[RoomPlan] ARWorldMap saved successfully for resume")
+        // Save to static variable (in-memory)
+        RoomPlanCaptureUIView.savedWorldMap = worldMap
+        print("[RoomPlan] ARWorldMap saved to memory successfully")
+        
+        // Also persist to disk for robustness
+        if let fileURL = RoomPlanCaptureUIView.savedWorldMapFileURL {
+          do {
+            let data = try NSKeyedArchiver.archivedData(withRootObject: worldMap, requiringSecureCoding: true)
+            try data.write(to: fileURL)
+            print("[RoomPlan] ARWorldMap saved to disk at: \(fileURL.path)")
+            print("[RoomPlan] ARWorldMap anchors count: \(worldMap.anchors.count)")
+          } catch {
+            print("[RoomPlan] ERROR: Failed to save ARWorldMap to disk: \(error.localizedDescription)")
+          }
+        }
+      } else {
+        print("[RoomPlan] WARNING: getCurrentWorldMap returned nil worldMap without error")
       }
       
       // Stop capturing to finalize current room; preview will be presented by RoomPlan
@@ -264,6 +283,7 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     lastResumeTrigger = trigger
     
     print("[RoomPlan] Resume scan triggered")
+    print("[RoomPlan] Static savedWorldMap exists: \(RoomPlanCaptureUIView.savedWorldMap != nil)")
     
     // Reset state flags
     pendingFinish = false
@@ -271,9 +291,36 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     previewEmitted = false
     isRelocalized = false
     
-    guard let worldMap = savedWorldMap else {
-      print("[RoomPlan] No saved ARWorldMap, starting fresh scan")
+    // Try to get world map from static storage first, then from disk
+    var worldMap = RoomPlanCaptureUIView.savedWorldMap
+    
+    if worldMap == nil {
+      print("[RoomPlan] No world map in memory, trying to load from disk...")
+      if let fileURL = RoomPlanCaptureUIView.savedWorldMapFileURL,
+         FileManager.default.fileExists(atPath: fileURL.path) {
+        do {
+          let data = try Data(contentsOf: fileURL)
+          worldMap = try NSKeyedUnarchiver.unarchivedObject(ofClass: ARWorldMap.self, from: data)
+          if let wm = worldMap {
+            RoomPlanCaptureUIView.savedWorldMap = wm
+            print("[RoomPlan] ARWorldMap loaded from disk successfully")
+            print("[RoomPlan] Loaded worldMap anchors count: \(wm.anchors.count)")
+          }
+        } catch {
+          print("[RoomPlan] ERROR: Failed to load ARWorldMap from disk: \(error.localizedDescription)")
+        }
+      } else {
+        print("[RoomPlan] No ARWorldMap file found on disk")
+      }
+    } else {
+      print("[RoomPlan] Using ARWorldMap from memory")
+      print("[RoomPlan] Memory worldMap anchors count: \(worldMap!.anchors.count)")
+    }
+    
+    guard let finalWorldMap = worldMap else {
+      print("[RoomPlan] No saved ARWorldMap available, starting fresh scan")
       // No world map saved, start a fresh scan
+      emitOnJS { self.onStatus(["status": "no_worldmap"]) }
       DispatchQueue.main.async {
         self.roomCaptureView.captureSession.run(configuration: self.configuration)
         self.setupPhotoAndAudioCapture()
@@ -282,6 +329,7 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     }
     
     print("[RoomPlan] Loading saved ARWorldMap for relocalization...")
+    print("[RoomPlan] WorldMap has \(finalWorldMap.anchors.count) anchors")
     isWaitingForRelocalization = true
     
     // Emit status that we're relocalizing
@@ -289,7 +337,7 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     
     // Configure AR session with saved world map for relocalization
     let arConfig = ARWorldTrackingConfiguration()
-    arConfig.initialWorldMap = worldMap
+    arConfig.initialWorldMap = finalWorldMap
     
     // Run AR session with the saved world map to trigger relocalization
     DispatchQueue.main.async {
