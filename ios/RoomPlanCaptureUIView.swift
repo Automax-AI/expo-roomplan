@@ -58,14 +58,8 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
     // Check if we're on the main thread
     print("[RoomPlan] Is main thread: \(Thread.isMainThread)")
 
-    do {
-      roomCaptureView = RoomCaptureView(frame: .zero)
-      print("[RoomPlan] RoomCaptureView created successfully")
-    } catch {
-      print("[RoomPlan] ERROR: Failed to create RoomCaptureView: \(error)")
-      // Create a dummy view to prevent crash
-      roomCaptureView = RoomCaptureView(frame: .zero)
-    }
+    roomCaptureView = RoomCaptureView(frame: .zero)
+    print("[RoomPlan] RoomCaptureView created successfully")
 
     roomCaptureView.translatesAutoresizingMaskIntoConstraints = false
     roomCaptureView.captureSession.delegate = self
@@ -326,7 +320,9 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
   }
 
   private func startAudioRecordingIfPermitted() {
-    AVAudioSession.sharedInstance().requestRecordPermission { granted in
+    // iOS 17+: AVAudioSession.requestRecordPermission is deprecated.
+    // ExpoRoomplan targets iOS 17+, so prefer AVAudioApplication.
+    AVAudioApplication.requestRecordPermission { granted in
       guard granted else {
         self.emitOnJS {
           self.onAudio(["status": "error", "errorMessage": "Microphone permission denied"])

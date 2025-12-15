@@ -9,6 +9,7 @@ jsconfig.json
 # Xcode
 #
 build/
+ios/build/
 *.pbxuser
 !default.pbxuser
 *.mode1v3
@@ -42,6 +43,7 @@ android/keystores/debug.keystore
 # Cocoapods
 #
 example/ios/Pods
+ios/Pods/
 
 # Ruby
 example/vendor/

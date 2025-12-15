@@ -29,6 +29,19 @@ Pod::Spec.new do |s|
   # Explicitly link system frameworks used by RoomPlan
   s.frameworks = 'RoomPlan', 'RealityKit', 'ARKit'
 
-  s.source_files = "**/*.{h,m,mm,swift,hpp,cpp}"
+  # IMPORTANT:
+  # This podspec lives under `ios/`. Avoid globs like `**/*` here because they
+  # accidentally include Xcode/CocoaPods artifacts (e.g. `ios/Pods/**`) and
+  # React Native codegen output (e.g. `ios/build/generated/**`), which can break
+  # CI/EAS builds with errors like missing `folly/folly-config.h`.
+  #
+  # This module's native code is only these Swift files.
+  s.source_files = [
+    'ExpoRoomPlanModule.swift',
+    'ExpoRoomPlanViewModule.swift',
+    'RoomPlanCaptureUIView.swift',
+    'RoomPlanCaptureViewController.swift',
+    'RoomPlanUtils.swift',
+  ]
 
 end
