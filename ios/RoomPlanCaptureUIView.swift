@@ -459,7 +459,11 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
           self.previewEmitted = true
           // If requested, export right after preview
           if self.exportOnFinish {
+            // Prevent an early OK status from closing JS flow before export callback arrives.
+            self.pendingExport = false
+            self.pendingFinish = false
             self.exportResults()
+            return
           }
           self.pendingFinish = false
         }
