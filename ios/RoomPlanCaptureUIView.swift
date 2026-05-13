@@ -440,15 +440,30 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
 
   // MARK: - RoomPlan delegates
   func captureSession(_ session: RoomCaptureSession, didEndWith data: CapturedRoomData, error: (any Error)?) {
-    if let error {
-      emitOnJS { self.sendError(error.localizedDescription) }
-      return
-    }
+    let didEndWithError = (error != nil)
+    let didEndErrorMessage = error?.localizedDescription
+    let didEndErrorCode = captureErrorCode(for: error)
     let roomBuilder = RoomBuilder(options: [.beautifyObjects])
     Task {
       do {
         let capturedRoom = try await roomBuilder.capturedRoom(from: data)
         self.capturedRooms.append(capturedRoom)
+        if didEndWithError {
+          var recoveryPayload: [String: Any] = [
+            "recoveredFromError": true,
+            "errorMessage": didEndErrorMessage ?? ""
+          ]
+          if let didEndErrorCode {
+            recoveryPayload["errorCode"] = didEndErrorCode
+          }
+          self.pendingExport = false
+          self.pendingFinish = false
+          self.exportResults(
+            additionalPayload: recoveryPayload,
+            recoveryFailurePrefix: "Scan stopped and partial scan could not be saved"
+          )
+          return
+        }
         // If finishing, emit preview now that the processed room exists
         if self.pendingFinish && !self.previewEmitted {
           // Stop audio recording if configured to do so
@@ -475,7 +490,13 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
           self.emitOnJS { self.sendStatus(.OK) }
         }
       } catch {
-        self.emitOnJS { self.sendError("Failed to build captured room: \(error.localizedDescription)") }
+        if didEndWithError {
+          self.emitOnJS {
+            self.sendError("Scan stopped and partial scan could not be saved: \(error.localizedDescription)")
+          }
+        } else {
+          self.emitOnJS { self.sendError("Failed to build captured room: \(error.localizedDescription)") }
+        }
       }
     }
   }
@@ -497,7 +518,10 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
   }
 
   // MARK: - Export
-  private func exportResults() {
+  private func exportResults(
+    additionalPayload: [String: Any]? = nil,
+    recoveryFailurePrefix: String? = nil
+  ) {
     let exportedScanName = scanName ?? "Room"
 
     let destinationFolderURL = FileManager.default.temporaryDirectory.appending(path: "Export")
@@ -531,12 +555,21 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
           payload["audioUrl"] = audio.absoluteString
         }
         payload["photoUrls"] = self.photoUrls.map { $0.absoluteString }
+        if let additionalPayload {
+          for (key, value) in additionalPayload {
+            payload[key] = value
+          }
+        }
 
         self.emitOnJS { self.onExported(payload) }
         // Also emit a final OK status after export
         self.emitOnJS { self.sendStatus(.OK) }
       } catch {
-        self.emitOnJS { self.sendError("Export failed: \(error.localizedDescription)") }
+        if let recoveryFailurePrefix {
+          self.emitOnJS { self.sendError("\(recoveryFailurePrefix): \(error.localizedDescription)") }
+        } else {
+          self.emitOnJS { self.sendError("Export failed: \(error.localizedDescription)") }
+        }
       }
     }
   }
@@ -548,5 +581,15 @@ class RoomPlanCaptureUIView: ExpoView, RoomCaptureSessionDelegate, RoomCaptureVi
 
   private func sendError(_ message: String) {
     emitOnJS { self.onStatus(["status": ScanStatus.Error.rawValue, "errorMessage": message]) }
+  }
+
+  private func captureErrorCode(for error: (any Error)?) -> String? {
+    guard let captureError = error as? RoomCaptureSession.CaptureError else { return nil }
+    switch captureError {
+    case .exceedSceneSizeLimit:
+      return "exceedSceneSizeLimit"
+    default:
+      return nil
+    }
   }
 }
